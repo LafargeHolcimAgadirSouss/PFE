@@ -1,0 +1,1039 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Conveyor Belt Monitoring Dashboard</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <!-- CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <!-- JS -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.socket.io/4.6.1/socket.io.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/apexcharts"></script>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f8fafc;
+        }
+        .gauge-container {
+            width: 100%;
+            max-width: 250px;
+            margin: 0 auto;
+        }
+        .alert-item {
+            transition: all 0.3s ease;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+        }
+        .alert-item:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+        .video-container {
+            position: relative;
+            padding-bottom: 56.25%; /* 16:9 */
+            height: 0;
+            overflow: hidden;
+            background: #000;
+            border-radius: 12px;
+        }
+        .video-container img {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+        }
+        .belt-container {
+            height: 120px;
+            background-color: #f1f5f9;
+            border-radius: 8px;
+            position: relative;
+            overflow: hidden;
+        }
+        .belt-animation {
+            position: absolute;
+            top: 50%;
+            left: 0;
+            width: 100%;
+            height: 60px;
+            transform: translateY(-50%);
+            background-image: url("data:image/svg+xml,%3Csvg width='60' height='20' viewBox='0 0 60 20' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Crect x='0' y='0' width='60' height='20' fill='%23e2e8f0'/%3E%3Crect x='0' y='8' width='60' height='4' fill='%23cbd5e1'/%3E%3C/svg%3E");
+            background-repeat: repeat-x;
+            background-size: 60px 20px;
+        }
+        .anomaly-marker {
+            position: absolute;
+            width: 16px;
+            height: 16px;
+            border-radius: 50%;
+            transform: translate(-50%, -50%);
+            cursor: pointer;
+            z-index: 10;
+            transition: all 0.2s ease;
+        }
+        .anomaly-marker:hover {
+            transform: translate(-50%, -50%) scale(1.2);
+            box-shadow: 0 0 0 4px rgba(239, 68, 68, 0.3);
+        }
+        .anomaly-marker.critical {
+            background-color: #ef4444;
+            box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.5);
+        }
+        .anomaly-marker.warning {
+            background-color: #f59e0b;
+            box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.5);
+        }
+        .position-indicator {
+            position: absolute;
+            top: 0;
+            height: 100%;
+            width: 2px;
+            background-color: #3b82f6;
+            z-index: 5;
+        }
+        .tooltip {
+            position: absolute;
+            background: white;
+            padding: 8px 12px;
+            border-radius: 6px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            z-index: 100;
+            pointer-events: none;
+            opacity: 0;
+            transition: opacity 0.2s ease;
+            font-size: 12px;
+            min-width: 160px;
+        }
+        .severity-badge {
+            display: inline-flex;
+            align-items: center;
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 500;
+        }
+        .card {
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+        }
+        .card:hover {
+            transform: translateY(-4px);
+            box-shadow: 0 10px 25px rgba(0,0,0,0.08);
+        }
+    </style>
+</head>
+<body class="bg-gray-50">
+    <!-- Header -->
+    <header class="bg-white shadow-sm">
+        <div class="container mx-auto px-4 py-4">
+            <div class="flex flex-col md:flex-row justify-between items-center">
+                <div class="flex items-center mb-4 md:mb-0">
+                    <div class="bg-blue-600 p-2 rounded-lg mr-3">
+                        <i class="fas fa-conveyor-belt text-white text-xl"></i>
+                    </div>
+                    <div>
+                        <h1 class="text-xl md:text-2xl font-bold text-gray-800">Conveyor Belt Monitoring</h1>
+                        <p class="text-gray-500 text-sm">Real-time anomaly detection powered by AI</p>
+                    </div>
+                </div>
+                <div class="flex items-center space-x-4">
+                    <div class="hidden md:block text-right">
+                        <div class="text-xs text-gray-500">System Status</div>
+                        <div class="font-medium text-green-600 flex items-center">
+                            <span class="w-2 h-2 bg-green-500 rounded-full mr-2"></span>
+                            Operational
+                        </div>
+                    </div>
+                    <div class="hidden md:block text-right">
+                        <div class="text-xs text-gray-500">Last Update</div>
+                        <div class="font-medium" id="last-update">Just now</div>
+                    </div>
+                    <button class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors">
+                        <i class="fas fa-cog mr-2"></i> Settings
+                    </button>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Content -->
+    <main class="container mx-auto px-4 py-6">
+        <!-- Top Row - Key Metrics -->
+        <div class="grid grid-cols-1 md:grid-cols-4 gap-5 mb-6">
+            <!-- Anomaly Score Card -->
+            <div class="bg-white rounded-xl shadow-sm p-5 card">
+                <div class="flex items-center">
+                    <div class="gauge-container mr-4">
+                        <canvas id="gaugeCanvas"></canvas>
+                    </div>
+                    <div>
+                        <h3 class="text-gray-500 text-xs font-semibold uppercase tracking-wider">Current Anomaly Score</h3>
+                        <div class="text-2xl font-bold text-gray-800 mt-1" id="current-score">0.00</div>
+                        <div class="text-xs text-gray-500 mt-1" id="score-trend">
+                            <i class="fas fa-arrow-trend-up mr-1"></i> <span>No trend data</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Total Anomalies Card -->
+            <div class="bg-white rounded-xl shadow-sm p-5 card">
+                <div class="flex items-center justify-between">
+                    <div>
+                        <h3 class="text-gray-500 text-xs font-semibold uppercase tracking-wider">Total Anomalies</h3>
+                        <div class="text-2xl font-bold text-gray-800 mt-1" id="total-anomalies">0</div>
+                        <div class="text-xs text-gray-500 mt-1">
+                            <span>Last hour:</span>
+                            <span class="font-medium ml-1" id="hourly-anomalies">0</span>
+                        </div>
+                    </div>
+                    <div class="bg-red-100 p-3 rounded-full text-red-600">
+                        <i class="fas fa-exclamation-triangle text-xl"></i>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Belt Speed Card -->
+            <div class="bg-white rounded-xl shadow-sm p-5 card">
+                <h3 class="text-gray-500 text-xs font-semibold uppercase tracking-wider">Conveyor Speed</h3>
+                <div class="text-2xl font-bold text-blue-600 mt-1" id="belt-speed">3.5</div>
+                <div class="mt-3">
+                    <input type="range" min="1" max="10" step="0.1" value="3.5" 
+                           class="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer" 
+                           id="speed-slider">
+                </div>
+                <div class="flex justify-between text-xs text-gray-500 mt-1">
+                    <span>1 m/s</span>
+                    <span>5 m/s</span>
+                    <span>10 m/s</span>
+                </div>
+            </div>
+
+            <!-- System Uptime Card -->
+            <div class="bg-white rounded-xl shadow-sm p-5 card">
+                <div class="flex items-center justify-between">
+                    <div>
+                        <h3 class="text-gray-500 text-xs font-semibold uppercase tracking-wider">System Uptime</h3>
+                        <div class="text-2xl font-bold text-gray-800 mt-1" id="system-uptime">00:00:00</div>
+                        <div class="text-xs text-gray-500 mt-1">
+                            Started: <span id="start-time">Just now</span>
+                        </div>
+                    </div>
+                    <div class="bg-green-100 p-3 rounded-full text-green-600">
+                        <i class="fas fa-server text-xl"></i>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Belt Visualization -->
+        <div class="bg-white rounded-xl shadow-sm p-5 mb-6 card">
+            <h2 class="text-lg font-semibold text-gray-800 mb-4 flex items-center">
+                <i class="fas fa-belt-conveyor mr-2 text-blue-500"></i> Belt Visualization
+                <span class="text-xs font-normal text-gray-500 ml-auto">Length: <span id="belt-length">50</span> meters</span>
+            </h2>
+            <div class="belt-container relative" id="belt-container">
+                <div class="belt-animation" id="belt-animation"></div>
+                <div class="position-indicator" id="position-indicator"></div>
+                <div id="anomaly-markers"></div>
+                <div class="tooltip" id="belt-tooltip"></div>
+            </div>
+        </div>
+
+        <!-- Middle Row - Visualizations -->
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-5 mb-6">
+            <!-- Live Video Feed -->
+            <div class="bg-white rounded-xl shadow-sm overflow-hidden lg:col-span-2 card">
+                <div class="p-4 border-b border-gray-100 flex justify-between items-center">
+                    <h2 class="text-md font-semibold text-gray-800 flex items-center">
+                        <i class="fas fa-video mr-2 text-blue-500"></i> Live Camera Feed
+                    </h2>
+                    <div class="flex space-x-2">
+                        <button class="px-3 py-1 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg text-xs font-medium transition-colors" id="fullscreen-btn">
+                            <i class="fas fa-expand mr-1"></i> Fullscreen
+                        </button>
+                    </div>
+                </div>
+                <div class="video-container">
+                    <img src="{{ url_for('video_feed') }}" alt="Live video feed" id="video-feed">
+                </div>
+            </div>
+
+            <!-- Recent Alerts -->
+            <div class="bg-white rounded-xl shadow-sm overflow-hidden card">
+                <div class="p-4 border-b border-gray-100 flex justify-between items-center">
+                    <h2 class="text-md font-semibold text-gray-800 flex items-center">
+                        <i class="fas fa-bell mr-2 text-red-500"></i> Recent Alerts
+                    </h2>
+                    <span class="bg-red-100 text-red-800 text-xs px-2 py-1 rounded-full" id="alerts-count">0</span>
+                </div>
+                <div class="p-4 overflow-y-auto" style="max-height: 400px;">
+                    <div id="alerts-list" class="space-y-3">
+                        <div class="text-center py-8 text-gray-400">
+                            <i class="fas fa-bell-slash text-2xl mb-2"></i>
+                            <p>No recent alerts</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Bottom Row - Charts and Data -->
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-5 mb-6">
+            <!-- Anomaly Trend -->
+            <div class="bg-white rounded-xl shadow-sm p-5 lg:col-span-2 card">
+                <h2 class="text-md font-semibold text-gray-800 mb-4 flex items-center">
+                    <i class="fas fa-chart-line mr-2 text-blue-500"></i> Anomaly Trend (Last 30 Minutes)
+                </h2>
+                <div id="trend-chart" style="height: 280px;"></div>
+            </div>
+
+            <!-- Anomaly Distribution -->
+            <div class="bg-white rounded-xl shadow-sm p-5 card">
+                <h2 class="text-md font-semibold text-gray-800 mb-4 flex items-center">
+                    <i class="fas fa-chart-pie mr-2 text-purple-500"></i> Severity Distribution
+                </h2>
+                <div id="distribution-chart" style="height: 280px;"></div>
+            </div>
+        </div>
+
+        <!-- Snapshots Table -->
+        <div class="bg-white rounded-xl shadow-sm overflow-hidden card">
+            <div class="p-4 border-b border-gray-100 flex flex-col sm:flex-row justify-between items-start sm:items-center">
+                <h2 class="text-md font-semibold text-gray-800 mb-2 sm:mb-0 flex items-center">
+                    <i class="fas fa-camera mr-2 text-green-500"></i> Anomaly Snapshots
+                </h2>
+                <div class="flex space-x-2">
+                    <a href="{{ url_for('generate_report') }}" 
+                       class="px-3 py-1 bg-green-100 hover:bg-green-200 text-green-700 rounded-lg text-xs font-medium transition-colors">
+                        <i class="fas fa-file-pdf mr-1"></i> Generate Report
+                    </a>
+                    <a href="{{ url_for('download_logs') }}" 
+                       class="px-3 py-1 bg-blue-100 hover:bg-blue-200 text-blue-700 rounded-lg text-xs font-medium transition-colors">
+                        <i class="fas fa-download mr-1"></i> Export Data
+                    </a>
+                </div>
+            </div>
+            <div class="overflow-x-auto">
+                <table class="min-w-full divide-y divide-gray-200">
+                    <thead class="bg-gray-50">
+                        <tr>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Time</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Score</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Severity</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Position</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="snapshots-table" class="bg-white divide-y divide-gray-200">
+                        <tr>
+                            <td colspan="5" class="px-6 py-4 text-center text-gray-500">No anomaly data available</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </main>
+
+    <!-- Footer -->
+    <footer class="bg-white border-t border-gray-200 py-6">
+        <div class="container mx-auto px-4">
+            <div class="flex flex-col md:flex-row justify-between items-center">
+                <div class="mb-4 md:mb-0">
+                    <p class="text-gray-500 text-sm">© <span id="current-year"></span> Conveyor Monitoring System</p>
+                </div>
+                <div class="flex space-x-6">
+                    <a href="#" class="text-gray-400 hover:text-blue-600 transition-colors">
+                        <i class="fab fa-github"></i>
+                    </a>
+                    <a href="#" class="text-gray-400 hover:text-blue-400 transition-colors">
+                        <i class="fab fa-twitter"></i>
+                    </a>
+                    <a href="#" class="text-gray-400 hover:text-red-500 transition-colors">
+                        <i class="fas fa-envelope"></i>
+                    </a>
+                </div>
+            </div>
+        </div>
+    </footer>
+
+    <!-- Anomaly Details Modal -->
+    <div class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 hidden" id="anomaly-modal">
+        <div class="bg-white rounded-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+            <div class="p-5 border-b border-gray-200 flex justify-between items-center">
+                <h3 class="text-lg font-semibold text-gray-800">Anomaly Details</h3>
+                <button class="text-gray-400 hover:text-gray-600" id="close-modal">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            <div class="p-5" id="modal-content">
+                <div class="text-center py-8 text-gray-400">
+                    <i class="fas fa-spinner fa-spin text-2xl mb-2"></i>
+                    <p>Loading anomaly details...</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- JavaScript -->
+    <script>
+        // Initialize Socket.IO
+        const socket = io();
+        
+        // Initialize charts
+        let trendChart, distributionChart;
+        
+        // Current belt position
+        let currentBeltPosition = 0;
+        let beltLength = 50;
+        let anomalyMarkers = [];
+        
+        // Initialize gauge canvas
+        function initGaugeCanvas() {
+            const canvas = document.getElementById('gaugeCanvas');
+            canvas.width = 200;
+            canvas.height = 200;
+            renderGauge(0);
+        }
+        
+        // Format time
+        function formatTime(dateString) {
+            if (!dateString) return 'N/A';
+            const timeParts = dateString.split(' ')[1] || dateString;
+            return timeParts.split('.')[0];
+        }
+        
+        // Format date
+        function formatDate(dateString) {
+            if (!dateString) return 'N/A';
+            return dateString.split(' ')[0];
+        }
+        
+        // Update last update time
+        function updateLastUpdateTime() {
+            document.getElementById('last-update').textContent = new Date().toLocaleTimeString();
+        }
+        
+        // Render gauge
+        function renderGauge(score) {
+            const canvas = document.getElementById('gaugeCanvas');
+            const ctx = canvas.getContext('2d');
+            
+            // Clear canvas
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            // Draw gauge
+            const centerX = canvas.width / 2;
+            const centerY = canvas.height / 2;
+            const radius = Math.min(canvas.width, canvas.height) / 2 - 10;
+            
+            // Background
+            ctx.beginPath();
+            ctx.arc(centerX, centerY, radius, 0, Math.PI * 2);
+            ctx.fillStyle = '#f8fafc';
+            ctx.fill();
+            
+            // Gauge
+            const startAngle = Math.PI * 1.25;
+            const endAngle = Math.PI * 1.25 + (Math.PI * 1.5 * score);
+            
+            ctx.beginPath();
+            ctx.arc(centerX, centerY, radius, startAngle, endAngle);
+            ctx.lineWidth = radius * 0.5;
+            ctx.strokeStyle = getColor(score);
+            ctx.stroke();
+            
+            // Text
+            ctx.fillStyle = '#1f2937';
+            ctx.font = 'bold 16px Inter';
+            ctx.textAlign = 'center';
+            ctx.fillText((score * 100).toFixed(1) + '%', centerX, centerY + 5);
+            
+            // Update current score display
+            document.getElementById('current-score').textContent = score.toFixed(2);
+        }
+        
+        // Get color based on score
+        function getColor(score) {
+            if (score < 0.3) return '#ef4444'; // red
+            if (score < 0.6) return '#f59e0b'; // amber
+            return '#10b981'; // emerald
+        }
+        
+        // Update alerts list
+        function updateAlertsList(alerts) {
+            const container = document.getElementById('alerts-list');
+            const alertsCount = document.getElementById('alerts-count');
+            
+            if (!alerts || alerts.length === 0) {
+                container.innerHTML = `
+                    <div class="text-center py-8 text-gray-400">
+                                            <div class="text-center py-8 text-gray-400">
+                        <i class="fas fa-bell-slash text-2xl mb-2"></i>
+                        <p>No recent alerts</p>
+                    </div>
+                `;
+                alertsCount.textContent = '0';
+                return;
+            }
+            
+            alertsCount.textContent = alerts.length;
+            container.innerHTML = alerts.map(alert => `
+                <div class="alert-item p-3 rounded-lg border ${alert.severity === 'High' ? 'border-red-200 bg-red-50' : 'border-amber-200 bg-amber-50'}">
+                    <div class="flex items-start">
+                        <div class="mr-3 mt-1">
+                            <div class="w-8 h-8 rounded-full ${alert.severity === 'High' ? 'bg-red-100 text-red-600' : 'bg-amber-100 text-amber-600'} flex items-center justify-center">
+                                <i class="fas fa-exclamation"></i>
+                            </div>
+                        </div>
+                        <div class="flex-1">
+                            <div class="flex justify-between items-start">
+                                <div>
+                                    <h4 class="font-medium text-gray-800">${alert.severity} Anomaly</h4>
+                                    <p class="text-xs text-gray-500">${alert.time}</p>
+                                </div>
+                                <span class="text-xs font-semibold px-2 py-1 rounded-full ${alert.severity === 'High' ? 'bg-red-100 text-red-800' : 'bg-amber-100 text-amber-800'}">
+                                    Score: ${alert.score.toFixed(2)}
+                                </span>
+                            </div>
+                            <div class="mt-2 text-sm">
+                                <p><span class="text-gray-500">Position:</span> ${alert.position}</p>
+                                <p><span class="text-gray-500">Speed:</span> ${alert.belt_speed}</p>
+                            </div>
+                            <div class="mt-2 flex space-x-2">
+                                <button class="text-xs bg-white hover:bg-gray-50 px-2 py-1 rounded border border-gray-200 transition-colors view-snapshot" data-id="${alert.id}">
+                                    <i class="fas fa-eye mr-1"></i> View
+                                </button>
+                                <button class="text-xs bg-white hover:bg-gray-50 px-2 py-1 rounded border border-gray-200 transition-colors view-belt" data-position="${alert.position.split(' ')[0]}">
+                                    <i class="fas fa-belt-conveyor mr-1"></i> Belt Location
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `).join('');
+            
+            // Add event listeners to view buttons
+            document.querySelectorAll('.view-snapshot').forEach(button => {
+                button.addEventListener('click', () => viewAnomalyDetails(button.dataset.id));
+            });
+            
+            document.querySelectorAll('.view-belt').forEach(button => {
+                button.addEventListener('click', () => {
+                    const position = parseFloat(button.dataset.position);
+                    highlightBeltPosition(position);
+                });
+            });
+        }
+        
+        // Update snapshots table
+        function updateSnapshotsTable(anomalies) {
+            const container = document.getElementById('snapshots-table');
+            
+            if (!anomalies || anomalies.length === 0) {
+                container.innerHTML = `
+                    <tr>
+                        <td colspan="5" class="px-6 py-4 text-center text-gray-500">No anomaly data available</td>
+                    </tr>
+                `;
+                return;
+            }
+            
+            container.innerHTML = anomalies.map(anomaly => {
+                const severity = anomaly.prediction < 0.3 ? 'High' : 'Moderate';
+                const severityClass = severity === 'High' ? 'bg-red-100 text-red-800' : 'bg-amber-100 text-amber-800';
+                
+                return `
+                    <tr>
+                        <td class="px-6 py-4 whitespace-nowrap">
+                            <div class="text-sm text-gray-900">${formatTime(anomaly.timestamp)}</div>
+                            <div class="text-xs text-gray-500">${formatDate(anomaly.timestamp)}</div>
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap">
+                            <div class="text-sm font-medium ${anomaly.prediction < 0.5 ? 'text-red-600' : 'text-amber-600'}">
+                                ${parseFloat(anomaly.prediction).toFixed(3)}
+                            </div>
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap">
+                            <span class="px-2 py-1 text-xs rounded-full ${severityClass}">
+                                ${severity}
+                            </span>
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                            ${parseFloat(anomaly.position).toFixed(2)} m
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm font-medium">
+                            <button class="text-blue-600 hover:text-blue-900 mr-3 view-snapshot" data-id="${anomaly.id}">
+                                <i class="fas fa-eye mr-1"></i> View
+                            </button>
+                            <a href="/snapshot/${anomaly.snapshot_path.split('/').pop()}" 
+                               class="text-green-600 hover:text-green-900" 
+                               target="_blank" 
+                               download>
+                                <i class="fas fa-download mr-1"></i> Download
+                            </a>
+                        </td>
+                    </tr>
+                `;
+            }).join('');
+            
+            // Add event listeners to view buttons
+            document.querySelectorAll('.view-snapshot').forEach(button => {
+                button.addEventListener('click', () => viewAnomalyDetails(button.dataset.id));
+            });
+        }
+        
+        // View anomaly details
+        function viewAnomalyDetails(anomalyId) {
+            const modal = document.getElementById('anomaly-modal');
+            const modalContent = document.getElementById('modal-content');
+            
+            modal.classList.remove('hidden');
+            modalContent.innerHTML = `
+                <div class="text-center py-8 text-gray-400">
+                    <i class="fas fa-spinner fa-spin text-2xl mb-2"></i>
+                    <p>Loading anomaly details...</p>
+                </div>
+            `;
+            
+            fetch(`/anomaly/${anomalyId}`)
+                .then(response => response.json())
+                .then(data => {
+                    modalContent.innerHTML = `
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                            <div>
+                                <h4 class="text-sm font-medium text-gray-500 mb-1">Time Detected</h4>
+                                <p class="text-gray-800 mb-4">${data.time}</p>
+                                
+                                <h4 class="text-sm font-medium text-gray-500 mb-1">Anomaly Score</h4>
+                                <p class="text-2xl font-bold mb-4 ${data.prediction < 0.3 ? 'text-red-600' : 'text-amber-600'}">
+                                    ${parseFloat(data.prediction).toFixed(3)}
+                                </p>
+                                
+                                <h4 class="text-sm font-medium text-gray-500 mb-1">Belt Position</h4>
+                                <p class="text-gray-800 mb-4">${parseFloat(data.position).toFixed(2)} meters</p>
+                                
+                                <h4 class="text-sm font-medium text-gray-500 mb-1">Belt Speed</h4>
+                                <p class="text-gray-800">${parseFloat(data.belt_speed).toFixed(2)} m/s</p>
+                            </div>
+                            <div>
+                                <div class="border border-gray-200 rounded-lg overflow-hidden">
+                                    <img src="/snapshot/${data.snapshot_path.split('/').pop()}" 
+                                         alt="Anomaly snapshot" 
+                                         class="w-full h-auto">
+                                </div>
+                                <div class="mt-4">
+                                    <button class="w-full bg-blue-600 hover:bg-blue-700 text-white py-2 rounded-lg transition-colors"
+                                            onclick="highlightBeltPosition(${parseFloat(data.position)})">
+                                        <i class="fas fa-belt-conveyor mr-2"></i> Show on Belt
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                })
+                .catch(error => {
+                    modalContent.innerHTML = `
+                        <div class="text-center py-8 text-red-500">
+                            <i class="fas fa-exclamation-circle text-2xl mb-2"></i>
+                            <p>Failed to load anomaly details</p>
+                            <p class="text-sm text-gray-500 mt-2">${error.message}</p>
+                        </div>
+                    `;
+                });
+        }
+        
+        // Highlight belt position
+        function highlightBeltPosition(position) {
+            const beltContainer = document.getElementById('belt-container');
+            const beltWidth = beltContainer.offsetWidth;
+            const positionPercentage = (position % beltLength) / beltLength;
+            const positionPx = positionPercentage * beltWidth;
+            
+            // Update position indicator
+            const indicator = document.getElementById('position-indicator');
+            indicator.style.left = `${positionPx}px`;
+            
+            // Scroll to position if needed
+            beltContainer.scrollTo({
+                left: positionPx - beltWidth / 2,
+                behavior: 'smooth'
+            });
+            
+            // Highlight the nearest anomaly marker if close
+            let closestMarker = null;
+            let minDistance = Infinity;
+            
+            anomalyMarkers.forEach(marker => {
+                const markerPos = parseFloat(marker.dataset.position);
+                const distance = Math.abs(markerPos - position);
+                
+                if (distance < minDistance && distance < 5) { // 5 meters threshold
+                    minDistance = distance;
+                    closestMarker = marker;
+                }
+            });
+            
+            if (closestMarker) {
+                // Remove previous highlights
+                document.querySelectorAll('.anomaly-marker.highlighted').forEach(m => {
+                    m.classList.remove('highlighted');
+                    m.style.boxShadow = '0 0 0 3px rgba(239, 68, 68, 0.5)';
+                });
+                
+                // Highlight the closest marker
+                closestMarker.classList.add('highlighted');
+                closestMarker.style.boxShadow = '0 0 0 6px rgba(59, 130, 246, 0.5)';
+                
+                // Scroll to marker
+                closestMarker.scrollIntoView({
+                    behavior: 'smooth',
+                    block: 'nearest',
+                    inline: 'center'
+                });
+            }
+        }
+        
+        // Update belt visualization
+        function updateBeltVisualization(position, anomalies) {
+            currentBeltPosition = position;
+            const beltContainer = document.getElementById('belt-container');
+            const beltWidth = beltContainer.offsetWidth;
+            
+            // Update position indicator
+            const positionPercentage = (position % beltLength) / beltLength;
+            const positionPx = positionPercentage * beltWidth;
+            document.getElementById('position-indicator').style.left = `${positionPx}px`;
+            
+            // Update anomaly markers
+            const markersContainer = document.getElementById('anomaly-markers');
+            markersContainer.innerHTML = '';
+            anomalyMarkers = [];
+            
+            Object.values(anomalies).forEach(anomaly => {
+                const anomalyPos = parseFloat(anomaly.position);
+                const anomalyPercentage = (anomalyPos % beltLength) / beltLength;
+                const anomalyPx = anomalyPercentage * beltWidth;
+                
+                const marker = document.createElement('div');
+                marker.className = `anomaly-marker ${anomaly.prediction < 0.3 ? 'critical' : 'warning'}`;
+                marker.style.left = `${anomalyPx}px`;
+                marker.style.top = '50%';
+                marker.dataset.position = anomalyPos;
+                marker.dataset.id = anomaly.id;
+                
+                marker.addEventListener('mouseenter', (e) => {
+                    const tooltip = document.getElementById('belt-tooltip');
+                    tooltip.innerHTML = `
+                        <div class="text-xs">
+                            <div class="font-semibold">${anomaly.time.split(' ')[1]}</div>
+                            <div>Score: <span class="font-medium">${parseFloat(anomaly.prediction).toFixed(3)}</span></div>
+                            <div>Position: <span class="font-medium">${parseFloat(anomaly.position).toFixed(2)} m</span></div>
+                        </div>
+                    `;
+                    tooltip.style.left = `${e.clientX}px`;
+                    tooltip.style.top = `${e.clientY - 80}px`;
+                    tooltip.style.opacity = '1';
+                });
+                
+                marker.addEventListener('mouseleave', () => {
+                    document.getElementById('belt-tooltip').style.opacity = '0';
+                });
+                
+                marker.addEventListener('click', () => {
+                    viewAnomalyDetails(anomaly.id);
+                });
+                
+                markersContainer.appendChild(marker);
+                anomalyMarkers.push(marker);
+            });
+        }
+        
+        // Initialize trend chart
+        function initTrendChart() {
+            trendChart = new ApexCharts(document.querySelector("#trend-chart"), {
+                series: [{
+                    name: "Anomaly Score",
+                    data: []
+                }],
+                chart: {
+                    height: '100%',
+                    type: 'line',
+                    zoom: {
+                        enabled: false
+                    },
+                    toolbar: {
+                        show: false
+                    }
+                },
+                dataLabels: {
+                    enabled: false
+                },
+                stroke: {
+                    curve: 'smooth',
+                    width: 3
+                },
+                colors: ['#3b82f6'],
+                grid: {
+                    borderColor: '#f1f5f9',
+                    strokeDashArray: 4,
+                    padding: {
+                        top: 0,
+                        right: 10,
+                        bottom: 0,
+                        left: 10
+                    }
+                },
+                xaxis: {
+                    type: 'datetime',
+                    labels: {
+                        style: {
+                            colors: '#6b7280',
+                            fontSize: '12px'
+                        }
+                    },
+                    axisBorder: {
+                        show: false
+                    },
+                    axisTicks: {
+                        show: false
+                    }
+                },
+                yaxis: {
+                    min: 0,
+                    max: 1,
+                    labels: {
+                        style: {
+                            colors: '#6b7280',
+                            fontSize: '12px'
+                        },
+                        formatter: (val) => {
+                            return val.toFixed(1);
+                        }
+                    }
+                },
+                tooltip: {
+                    enabled: true,
+                    x: {
+                        format: 'HH:mm:ss'
+                    }
+                }
+            });
+            
+            trendChart.render();
+        }
+        
+        // Initialize distribution chart
+        function initDistributionChart() {
+            distributionChart = new ApexCharts(document.querySelector("#distribution-chart"), {
+                series: [0, 0, 0],
+                chart: {
+                    type: 'donut',
+                    height: '100%'
+                },
+                labels: ['Critical (<0.3)', 'Moderate (0.3-0.5)', 'Normal (≥0.5)'],
+                colors: ['#ef4444', '#f59e0b', '#10b981'],
+                legend: {
+                    position: 'bottom',
+                    fontSize: '12px',
+                    labels: {
+                        colors: '#6b7280'
+                    }
+                },
+                plotOptions: {
+                    pie: {
+                        donut: {
+                            size: '65%',
+                            labels: {
+                                show: true,
+                                total: {
+                                    show: true,
+                                    label: 'Total',
+                                    color: '#6b7280',
+                                    formatter: () => {
+                                        const total = distributionChart.w.globals.series.reduce((a, b) => a + b, 0);
+                                        return total;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                dataLabels: {
+                    enabled: false
+                }
+            });
+            
+            distributionChart.render();
+        }
+        
+        // Update distribution chart
+        function updateDistributionChart(anomalies) {
+            if (!anomalies || anomalies.length === 0) {
+                distributionChart.updateSeries([0, 0, 0]);
+                return;
+            }
+            
+            const critical = anomalies.filter(a => a.prediction < 0.3).length;
+            const moderate = anomalies.filter(a => a.prediction >= 0.3 && a.prediction < 0.5).length;
+            const normal = anomalies.filter(a => a.prediction >= 0.5).length;
+            
+            distributionChart.updateSeries([critical, moderate, normal]);
+        }
+        
+        // Update trend chart
+        function updateTrendChart(data) {
+            // For demo purposes, we'll generate some random data
+            const now = new Date();
+            const timestamps = [];
+            const values = [];
+            
+            for (let i = 29; i >= 0; i--) {
+                const time = new Date(now.getTime() - i * 60000);
+                timestamps.push(time.getTime());
+                
+                // Simulate some variation in the data
+                const baseValue = Math.max(0.1, Math.min(0.9, data.latest_score));
+                const variation = (Math.random() - 0.5) * 0.2;
+                values.push(Math.max(0, Math.min(1, baseValue + variation)));
+            }
+            
+            trendChart.updateSeries([{
+                data: timestamps.map((t, i) => ({
+                    x: t,
+                    y: values[i]
+                }))
+            }]);
+        }
+        
+        // Handle speed slider change
+        function handleSpeedChange() {
+            const slider = document.getElementById('speed-slider');
+            const newSpeed = parseFloat(slider.value);
+            
+            fetch('/update_speed', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                },
+                body: `speed=${newSpeed}`
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.status === 'success') {
+                    document.getElementById('belt-speed').textContent = newSpeed.toFixed(1);
+                }
+            })
+            .catch(error => {
+                console.error('Error updating belt speed:', error);
+            });
+        }
+        
+        // Initialize the application
+        function initApp() {
+            // Set current year in footer
+            document.getElementById('current-year').textContent = new Date().getFullYear();
+            
+            // Initialize gauge
+            initGaugeCanvas();
+            
+            // Initialize charts
+            initTrendChart();
+            initDistributionChart();
+            
+            // Add event listeners
+            document.getElementById('speed-slider').addEventListener('input', handleSpeedChange);
+            document.getElementById('close-modal').addEventListener('click', () => {
+                document.getElementById('anomaly-modal').classList.add('hidden');
+            });
+            
+            document.getElementById('fullscreen-btn').addEventListener('click', () => {
+                const videoFeed = document.getElementById('video-feed');
+                if (videoFeed.requestFullscreen) {
+                    videoFeed.requestFullscreen();
+                } else if (videoFeed.webkitRequestFullscreen) {
+                    videoFeed.webkitRequestFullscreen();
+                } else if (videoFeed.msRequestFullscreen) {
+                    videoFeed.msRequestFullscreen();
+                }
+            });
+            
+            // Initial data fetch
+            fetch('/data')
+                .then(response => response.json())
+                .then(data => {
+                    renderGauge(data.latest_score);
+                    updateAlertsList(data.alerts);
+                    updateSnapshotsTable(data.anomaly_positions);
+                    document.getElementById('belt-speed').textContent = data.belt_speed.toFixed(1);
+                    document.getElementById('speed-slider').value = data.belt_speed;
+                    document.getElementById('system-uptime').textContent = data.uptime;
+                    document.getElementById('start-time').textContent = new Date().toLocaleTimeString();
+                    document.getElementById('belt-length').textContent = data.belt_length;
+                    
+                    // Update charts
+                    updateTrendChart(data);
+                    updateDistributionChart(data.anomaly_positions);
+                    
+                    // Update belt visualization
+                    updateBeltVisualization(0, data.anomaly_positions);
+                })
+                .catch(error => {
+                    console.error('Error fetching initial data:', error);
+                });
+            
+            // Set up periodic updates
+            setInterval(() => {
+                fetch('/data')
+                    .then(response => response.json())
+                    .then(data => {
+                        renderGauge(data.latest_score);
+                        updateAlertsList(data.alerts);
+                        updateSnapshotsTable(data.anomaly_positions);
+                        document.getElementById('belt-speed').textContent = data.belt_speed.toFixed(1);
+                        document.getElementById('system-uptime').textContent = data.uptime;
+                        
+                        // Update charts
+                        updateTrendChart(data);
+                        updateDistributionChart(data.anomaly_positions);
+                        
+                        // Update belt visualization
+                        updateBeltVisualization(data.anomaly_positions[0]?.position || 0, data.anomaly_positions);
+                        
+                        // Update last update time
+                        updateLastUpdateTime();
+                    })
+                    .catch(error => {
+                        console.error('Error fetching data:', error);
+                    });
+            }, 3000);
+            
+            // Socket.IO event listeners
+            socket.on('new_alert', (alert) => {
+                // Play notification sound
+                const audio = new Audio('https://assets.mixkit.co/sfx/preview/mixkit-alarm-digital-clock-beep-989.mp3');
+                audio.volume = 0.3;
+                audio.play().catch(e => console.log('Audio playback failed:', e));
+                
+                // Show notification
+                if (Notification.permission === 'granted') {
+                    new Notification('New Anomaly Detected', {
+                        body: `${alert.severity} anomaly detected with score ${alert.score.toFixed(2)}`,
+                        icon: '/static/favicon.ico'
+                    });
+                }
+            });
+        }
+        
+        // Request notification permission
+        if (Notification.permission !== 'denied') {
+            Notification.requestPermission();
+        }
+        
+        // Initialize when DOM is loaded
+        document.addEventListener('DOMContentLoaded', initApp);
+    </script>
+</body>
+</html>
